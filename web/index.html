@@ -136,6 +136,24 @@
     </form>
   </dialog>
 
+  <dialog id="login" class="settings login" aria-labelledby="loginTitle">
+    <form id="loginForm" method="dialog" novalidate>
+      <header class="settings-head">
+        <h2 id="loginTitle">管理员登录</h2>
+        <button type="button" class="x" id="loginCancel" aria-label="关闭">×</button>
+      </header>
+      <section class="settings-body">
+        <p id="loginText" class="field-hint" style="margin-top:12px"></p>
+        <input id="loginPassword" type="password" autocomplete="current-password" placeholder="管理员密码" spellcheck="false">
+        <p id="loginError" class="s-status err" role="alert" style="margin-top:8px"></p>
+      </section>
+      <footer class="settings-foot">
+        <span style="flex:1"></span>
+        <button type="submit" class="btn" id="loginSubmit">登录</button>
+      </footer>
+    </form>
+  </dialog>
+
   <footer class="foot">
     <span>数据：Google News · Nasdaq · FRED · CNN Fear &amp; Greed</span>
     <span>仅供研究，不构成投资建议</span>

@@ -22,7 +22,14 @@ function snapshotPath(path) {
 
 const api = async (path, init) => {
   const r = await fetch(STATIC ? snapshotPath(path) : path, STATIC ? undefined : init);
-  if (!r.ok) throw new Error(`${path} → ${r.status}`);
+  if (!r.ok) {
+    // 服务器给的原因（"额度用完了""需要登录"）比状态码有用，带上。
+    let detail = "";
+    try { detail = (await r.json()).error ?? ""; } catch { /* 不是 JSON */ }
+    const err = new Error(detail || `${path} → ${r.status}`);
+    err.status = r.status;
+    throw err;
+  }
   return r.json();
 };
 
@@ -174,8 +181,43 @@ function formBody() {
   };
 }
 
+/** 需要管理员：有密码就弹登录框，没设密码就把原因告诉他。 */
+function askLogin(message) {
+  const d = $("#login");
+  $("#loginPassword").hidden = !message.login;
+  $("#loginSubmit").hidden = !message.login;
+  $("#loginText").textContent = message.text;
+  $("#loginError").textContent = "";
+  $("#loginPassword").value = "";
+  if (!d.open) d.showModal();
+  if (message.login) $("#loginPassword").focus();
+}
+
+$("#loginCancel").addEventListener("click", () => $("#login").close());
+$("#loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("#loginSubmit");
+  btn.disabled = true;
+  try {
+    await postSettings("/api/login", { password: $("#loginPassword").value });
+    $("#login").close();
+    await openSettings();
+  } catch (err) {
+    $("#loginError").textContent = err.message;
+    $("#loginPassword").select();
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 async function openSettings() {
-  settingsData = await api("/api/settings");
+  try {
+    settingsData = await api("/api/settings");
+  } catch (e) {
+    if (e.status === 401) return askLogin({ login: true, text: "改 AI 设置需要管理员密码。" });
+    if (e.status === 403) return askLogin({ login: false, text: e.message });
+    throw e;
+  }
   $("#sPreset").innerHTML = settingsData.presets.map((p) => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join("");
   $("#sPreset").value = settingsData.current.preset;
   applyPreset(settingsData.current.preset, true);

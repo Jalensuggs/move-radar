@@ -54,6 +54,8 @@ npm run typecheck     # 类型检查
 
 想要实时的，本地 `npm start`，或者部署到能跑 Node 的地方（Fly.io、Railway、自己的服务器都行，一个进程、一个 SQLite 文件）。
 
+完整版（带后端）部署到自己的服务器，见 [deploy/README.md](deploy/README.md)：一个 Docker 容器 + Caddy 反代，带管理员登录、访客限流和内存上限。
+
 **更新线上快照：**
 
 ```bash

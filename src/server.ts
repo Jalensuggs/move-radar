@@ -14,13 +14,25 @@ import { costToday, currentConfig, DEFAULT_SAVING, listModels, llmStatus, markVi
 import { attributeMove, MOVE_Z, type Attribution, type MoveRow } from "./moves.ts";
 import { SELECT_THRESHOLD } from "./judge.ts";
 import { tick } from "./worker.ts";
+import { authProblem, isAdmin, login, sameOrigin, takePublicAttribution } from "./auth.ts";
 
 const WEB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "web");
 const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml" };
 
+/** 所有响应都带：不让浏览器猜类型、不许被别的网站用 iframe 套住（防点击劫持）、不外泄来源页。 */
+const SECURITY = { "x-content-type-options": "nosniff", "x-frame-options": "DENY", "referrer-policy": "no-referrer" };
+
 function send(res: ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...SECURITY });
   res.end(JSON.stringify(body));
+}
+
+/** 需要管理员的接口：不是就直接回 401 / 403，返回 false。 */
+function requireAdmin(req: IncomingMessage, res: ServerResponse): boolean {
+  if (isAdmin(req)) return true;
+  const { status, error } = authProblem();
+  send(res, status, { error });
+  return false;
 }
 
 function tile(symbol: string, name: string, extra: Record<string, unknown> = {}) {
@@ -141,17 +153,6 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   return JSON.parse(body || "{}") as Record<string, unknown>;
 }
 
-/**
- * 改设置、触发归因的请求只接受本页面发来的：别的网站在你浏览器里偷偷往 localhost 发请求（CSRF），
- * 会因为 Origin 不对被拒；要求 JSON 也会让跨站请求先被浏览器的预检拦下。
- */
-function sameOrigin(req: IncomingMessage): boolean {
-  const origin = req.headers.origin;
-  const host = req.headers.host ?? "";
-  if (!/application\/json/.test(req.headers["content-type"] ?? "")) return false;
-  return !origin || origin === `http://${host}`;
-}
-
 export function moveSummary(m: MoveRow) {
   const at = m.attribution ? (JSON.parse(m.attribution) as Attribution) : null;
   return {
@@ -167,13 +168,22 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   const p = url.pathname;
   const q = (k: string) => url.searchParams.get(k);
 
+  // 健康检查：不算"有人在看"（否则"没人看就暂停模型"永远不生效），也不碰数据库以外的东西。
+  if (p === "/healthz") return send(res, 200, { ok: true });
   if (req.method === "POST" && !sameOrigin(req)) return send(res, 403, { error: "forbidden" });
+
+  if (p === "/api/login" && req.method === "POST") {
+    const body = await readJson(req);
+    const r = login(req, res, String(body.password ?? ""));
+    return send(res, r.status, r.ok ? { ok: true } : { error: r.error });
+  }
 
   if (p === "/api/overview") {
     // 看板每分钟（页面可见时）刷新一次，这就是"有人在看"的信号。闲置后第一次回来，马上跑一轮把积压的新闻处理掉。
     if (markViewer() && process.env.WORKER !== "off") void tick();
     return send(res, 200, overview());
   }
+  if (p.startsWith("/api/settings") && !requireAdmin(req, res)) return;
   if (p === "/api/settings" && req.method === "GET") return send(res, 200, settingsView());
   if (p === "/api/settings" && req.method === "POST") {
     const body = await readJson(req);
@@ -226,12 +236,19 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   }
   if (p === "/api/attribute" && req.method === "POST") {
     const { symbol, date } = (await readJson(req)) as { symbol?: string; date?: string };
-    if (!symbol || !date || !assetBySymbol(symbol)) return send(res, 400, { error: "symbol and date required" });
+    if (!symbol || !date || !assetBySymbol(symbol) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return send(res, 400, { error: "symbol and date required" });
+    // 已经归因过的直接给结果：不重算、不花钱、不占访客额度。
+    const done = get<MoveRow>("SELECT * FROM moves WHERE symbol = ? AND date = ? AND attribution IS NOT NULL", symbol, date);
+    if (done) return send(res, 200, { move: moveSummary(done), attribution: JSON.parse(done.attribution!) });
+    // 现场归因要去外面抓新闻、调模型：访客限次，管理员不限。
+    const allowance = takePublicAttribution(req);
+    if (!allowance.ok) return send(res, 429, { error: allowance.error });
     const attribution = await attributeMove(symbol, date);
     const m = get<MoveRow>("SELECT * FROM moves WHERE symbol = ? AND date = ?", symbol, date);
     return send(res, attribution ? 200 : 404, { move: m ? moveSummary(m) : null, attribution });
   }
   if (p === "/api/status") {
+    if (!requireAdmin(req, res)) return; // 里面有信源的报错信息
     return send(res, 200, {
       llm: llmStatus(),
       sources: all("SELECT id, name, kind, topic, health, interval_min, fail_count, last_ok_at, last_error, (SELECT count(*) FROM articles a WHERE a.source_id = sources.id) AS articles FROM sources WHERE enabled = 1 ORDER BY topic, id"),
@@ -242,7 +259,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   // 图表库从 node_modules 直接给，不依赖 CDN，离线也能用。
   if (p === "/vendor/echarts.min.js") {
     const body = await readFile(path.join(WEB, "..", "node_modules", "echarts", "dist", "echarts.min.js"));
-    res.writeHead(200, { "content-type": TYPES[".js"]!, "cache-control": "public, max-age=86400" });
+    res.writeHead(200, { "content-type": TYPES[".js"]!, "cache-control": "public, max-age=86400", ...SECURITY });
     return res.end(body);
   }
 
@@ -251,7 +268,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   if (!/^[\w.-]+$/.test(file)) return send(res, 404, { error: "not found" });
   try {
     const body = await readFile(path.join(WEB, file));
-    res.writeHead(200, { "content-type": TYPES[path.extname(file)] ?? "application/octet-stream", "cache-control": "no-cache" });
+    res.writeHead(200, { "content-type": TYPES[path.extname(file)] ?? "application/octet-stream", "cache-control": "no-cache", ...SECURITY });
     res.end(body);
   } catch {
     send(res, 404, { error: "not found" });
@@ -265,6 +282,8 @@ export function startServer(port = Number(process.env.PORT || 3000)) {
       if (!res.headersSent) send(res, 500, { error: String(error instanceof Error ? error.message : error) });
     });
   });
-  server.listen(port, "127.0.0.1", () => console.log(`异动雷达 → http://localhost:${port}`));
+  // 本机开发只听回环地址；放进容器要设 HOST=0.0.0.0（由 compose 只映射到宿主机的 127.0.0.1，再由 Caddy 反代）。
+  const host = process.env.HOST || "127.0.0.1";
+  server.listen(port, host, () => console.log(`异动雷达 → http://${host === "0.0.0.0" ? "localhost" : host}:${port}`));
   return server;
 }

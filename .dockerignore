@@ -1,0 +1,14 @@
+.git
+.claude
+.env
+.env.*
+!.env.example
+node_modules
+data
+docs
+eval
+*.db
+*.db-wal
+*.db-shm
+README.md
+LICENSE

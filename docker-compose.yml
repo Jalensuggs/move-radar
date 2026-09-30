@@ -1,0 +1,28 @@
+# docker compose up -d --build
+# 只起应用本身，端口只绑宿主机的 127.0.0.1：对外的 HTTPS 由宿主机上的 Caddy 反代（见 deploy/README.md）。
+# 绑成 0.0.0.0 会绕过 Caddy 直接暴露到公网。
+name: move-radar
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # 前面有 Caddy：登录限流按 X-Forwarded-For 里的真实访客 IP 算。
+      TRUST_PROXY: "true"
+      NODE_OPTIONS: "--max-old-space-size=200"
+    volumes:
+      - radar-data:/data
+    # 共享的 2 GB 机器：给它一个上限，出问题也只杀它自己，不拖垮同机的其他项目。
+    mem_limit: 320m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  radar-data:

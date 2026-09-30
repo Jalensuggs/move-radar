@@ -272,3 +272,5 @@ main { padding: 16px 20px 8px; max-width: 1480px; margin: 0 auto; }
 @media (max-width: 640px) {
   .price-row { grid-template-columns: 1fr; }
 }
+
+.settings.login { width: min(380px, calc(100vw - 32px)); }
