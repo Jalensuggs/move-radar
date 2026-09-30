@@ -2,7 +2,9 @@
 
 **盯住半导体、AI 巨头、石油地缘和大盘情绪：自动收新闻、把同一件事聚成事件、算热度；股价一异动，自动回答"为什么"。**
 
-**[在线演示 →](https://jalensuggs.github.io/move-radar/)**　（只读快照，不会自己更新，见[部署](#在线演示与部署)）
+**[在线看（实时版）→ move-radar.canvas-myles.me](https://move-radar.canvas-myles.me)**　带后端，新闻和行情持续更新，部署在阿里云香港
+
+**[快照版 →](https://jalensuggs.github.io/move-radar/)**　GitHub Pages，只读，不会自己更新（区别见[部署](#在线演示与部署)）
 
 <sub>*In English:* a market-news radar. It collects news from ~20 sources, uses an LLM to filter, score and summarise them, clusters reports of the same story into events, ranks events by how many independent outlets cover them, and — when a stock or index makes an unusual move — attributes it to the most likely news event. Runs with no API key (rule-based fallback) or with any OpenAI-compatible model or Claude; includes cost controls and an attribution eval harness. Node.js + TypeScript + SQLite, no build step.</sub>
 
@@ -56,6 +58,8 @@ npm run typecheck     # 类型检查
 - 需要后端的功能不可用：「AI 设置」隐藏了；快照里只带已经归因过的异动，没归因的那天会提示"本地运行可以现场归因"。
 
 ### 三种跑法
+
+我自己的两个线上实例：[实时版](https://move-radar.canvas-myles.me)（自己的服务器）和[快照版](https://jalensuggs.github.io/move-radar/)（GitHub Pages）。
 
 | | 怎么跑 | 数据 | 适合 |
 |---|---|---|---|
