@@ -1,7 +1,7 @@
 // 行情与情绪：Nasdaq 数据接口（个股、指数、ETF）、FRED（官方序列）、CNN 恐慌贪婪指数。
 // 都不需要 key。第一次拉两年历史，之后每次只补最近几周。
 import { ASSETS, LEVELS, type AssetSpec } from "../../config/assets.ts";
-import { all, get, run, setKv, tx } from "../db.ts";
+import { all, get, getKv, run, setKv, tx } from "../db.ts";
 import { etDate, addDays } from "../lib/text.ts";
 import { fetchJson, fetchText, sleep } from "../lib/http.ts";
 
@@ -25,7 +25,40 @@ async function nasdaqSeries(sym: string, cls: string, from: string): Promise<Arr
   }).filter(([, c]) => Number.isFinite(c) && c > 0);
 }
 
+/** Cboe 的指数日线：VIX 文件有 OPEN/HIGH/LOW/CLOSE，SPX 文件只有一列收盘。日期是 MM/DD/YYYY，从 1990（VIX）/ 1975（SPX）开始。 */
+async function cboeSeries(file: string, from: string): Promise<Array<[string, number]>> {
+  const r = await fetchText(`https://cdn.cboe.com/api/global/us_indices/daily_prices/${file}_History.csv`, { timeoutMs: 45_000 });
+  const lines = r.text.trim().split("\n");
+  const header = lines[0]!.trim().split(",").map((h) => h.toUpperCase());
+  const col = header.includes("CLOSE") ? header.indexOf("CLOSE") : 1;
+  const out: Array<[string, number]> = [];
+  for (let i = lines.length - 1; i > 0; i--) {
+    const cells = lines[i]!.trim().split(",");
+    const [m, d, y] = (cells[0] ?? "").split("/");
+    const value = Number(cells[col]);
+    if (!y || !Number.isFinite(value) || value <= 0) continue;
+    const date = `${y}-${m!.padStart(2, "0")}-${d!.padStart(2, "0")}`;
+    if (date < from) break; // 文件按日期升序，从尾部往前读到起点就够了
+    out.push([date, value]);
+  }
+  return out.reverse();
+}
+
+/** FRED 连不上时（比如被屏蔽）：记下来，6 小时内不再试，免得每轮行情刷新白白等超时。 */
+const FRED_BACKOFF_MS = 6 * 3600_000;
+const fredDown = () => Date.now() - (getKv<number>("fred_down_at")?.value ?? 0) < FRED_BACKOFF_MS;
+
 async function fredSeries(id: string, from: string): Promise<Array<[string, number]>> {
+  if (fredDown()) throw new Error("FRED 暂时连不上，稍后再试");
+  try {
+    return await fredSeriesOnce(id, from);
+  } catch (error) {
+    setKv("fred_down_at", Date.now());
+    throw error;
+  }
+}
+
+async function fredSeriesOnce(id: string, from: string): Promise<Array<[string, number]>> {
   const r = await fetchText(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}&cosd=${from}`);
   return r.text.trim().split("\n").slice(1)
     .map((line) => line.split(","))
@@ -73,8 +106,8 @@ async function refreshAsset(a: AssetSpec, cnn: CnnResp | null): Promise<number> 
   if (a.feed.p === "nasdaq") {
     points = await nasdaqSeries(a.feed.sym, a.feed.cls, from);
   } else {
-    points = await fredSeries(a.feed.id, from);
-    // FRED 有发布延迟，用 CNN 数据里的同一序列补上最近几天（含盘中最新值）。
+    points = a.feed.p === "cboe" ? await cboeSeries(a.feed.file, from) : await fredSeries(a.feed.id, from);
+    // 官方序列有发布延迟，用 CNN 数据里的同一序列补上后面几天（含盘中最新值）。
     const extra = a.feed.cnn ? cnn?.[a.feed.cnn]?.data ?? [] : [];
     const lastFred = points.at(-1)?.[0] ?? "";
     for (const p of extra) {

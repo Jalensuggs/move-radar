@@ -69,7 +69,8 @@ export function overview() {
     topics: TOPICS.map((t) => ({ key: t.key, name: t.name })),
     tiles: [
       ...ASSETS.map((a) => tile(a.symbol, a.name, { group: a.group, note: a.note ?? null })),
-      ...LEVELS.map((l) => tile(l.symbol, l.name, { group: "level" })),
+      // 现货价来自 FRED，有的服务器连不上它：没数据的卡片直接不显示。
+      ...LEVELS.map((l) => tile(l.symbol, l.name, { group: "level" })).filter((t) => t.close != null),
     ],
     fearGreed: {
       cnn: getKv("cnn_fear_greed")?.value ?? null,

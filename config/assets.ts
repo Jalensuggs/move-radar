@@ -4,7 +4,9 @@ import type { TopicKey } from "./topics.ts";
 
 export type Feed =
   | { p: "nasdaq"; sym: string; cls: "stocks" | "etf" | "index" }
-  /** FRED 官方序列（有 1 天到 1 周的发布延迟），cnn 为 CNN 恐慌贪婪数据里的同一序列，用来补最近几天。 */
+  /** Cboe 官网公开的指数日线 CSV（免费，全历史，通常到前一交易日收盘）。cnn 为 CNN 恐慌贪婪数据里的同一序列，用来补当天的盘中值。 */
+  | { p: "cboe"; file: "SPX" | "VIX"; cnn?: string }
+  /** FRED 官方序列（有 1 天到 1 周的发布延迟；部分机房的 IP 会被它的 CDN 屏蔽）。 */
   | { p: "fred"; id: string; cnn?: string };
 
 export interface AssetSpec {
@@ -25,9 +27,9 @@ const ALL: TopicKey[] = ["macro", "semis", "ai", "energy"];
 
 export const ASSETS: AssetSpec[] = [
   // 大盘与情绪
-  { symbol: "SPX", name: "标普 500", group: "market", topics: ALL, keywords: ["s&p", "stocks", "wall street", "stock market"], newsQuery: "stock market", feed: { p: "fred", id: "SP500", cnn: "market_momentum_sp500" } },
+  { symbol: "SPX", name: "标普 500", group: "market", topics: ALL, keywords: ["s&p", "stocks", "wall street", "stock market"], newsQuery: "stock market", feed: { p: "cboe", file: "SPX", cnn: "market_momentum_sp500" } },
   { symbol: "COMP", name: "纳斯达克", group: "market", topics: ALL, keywords: ["nasdaq", "tech stocks", "stocks", "wall street"], newsQuery: "Nasdaq tech stocks", feed: { p: "nasdaq", sym: "COMP", cls: "index" } },
-  { symbol: "VIX", name: "VIX 恐慌", group: "market", topics: ALL, keywords: ["vix", "volatility", "selloff", "sell-off", "fear", "plunge", "rout"], newsQuery: "stock market selloff volatility", feed: { p: "fred", id: "VIXCLS", cnn: "market_volatility_vix" } },
+  { symbol: "VIX", name: "VIX 恐慌", group: "market", topics: ALL, keywords: ["vix", "volatility", "selloff", "sell-off", "fear", "plunge", "rout"], newsQuery: "stock market selloff volatility", feed: { p: "cboe", file: "VIX", cnn: "market_volatility_vix" } },
   // 半导体
   { symbol: "SOX", name: "费城半导体", group: "semis", topics: ["semis", "ai", "macro"], keywords: ["semiconductor", "chip", "chipmaker"], newsQuery: "chip stocks", feed: { p: "nasdaq", sym: "SOX", cls: "index" } },
   { symbol: "NVDA", name: "英伟达", group: "semis", topics: ["semis", "ai", "macro"], keywords: ["nvidia", "nvda", "jensen huang", "blackwell", "rubin"], newsQuery: "Nvidia stock", feed: { p: "nasdaq", sym: "NVDA", cls: "stocks" } },
