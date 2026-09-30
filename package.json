@@ -1,0 +1,32 @@
+{
+  "name": "move-radar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "异动雷达：半导体 / AI 巨头 / 石油地缘 / 大盘情绪的新闻采集、事件聚簇与股价异动归因",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node --no-warnings --env-file-if-exists=.env src/main.ts",
+    "collect": "node --no-warnings --env-file-if-exists=.env src/cli/collect-once.ts",
+    "eval": "node --no-warnings --env-file-if-exists=.env eval/eval-attribution.ts",
+    "typecheck": "tsc -p .",
+    "export:site": "node --no-warnings --env-file-if-exists=.env src/cli/export-site.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.129.0",
+    "echarts": "^5.6.0",
+    "fast-xml-parser": "^5.11.2",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "typescript": "^7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jalensuggs/move-radar.git"
+  },
+  "license": "MIT"
+}

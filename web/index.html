@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>异动雷达 MoveRadar</title>
+  <meta name="description" content="盯住半导体、AI 巨头、石油地缘和大盘情绪：自动收新闻、聚成事件、算热度；股价一异动，自动回答“为什么”。">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%230f766e'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23fffcf5' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%23fffcf5'/%3E%3C/svg%3E">
+  <script>
+    // 渲染前就定好主题，避免闪一下另一套颜色。默认奶白。
+    try { if (localStorage.getItem("theme") === "dark") document.documentElement.dataset.theme = "dark"; } catch {}
+  </script>
+  <link rel="stylesheet" href="style.css">
+  <script src="vendor/echarts.min.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="dot" aria-hidden="true"></span>
+      <strong>异动雷达</strong><span class="en">MoveRadar</span>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="top-actions">
+      <button class="toggle primary" id="settingsOpen" type="button">AI 设置</button>
+      <button class="toggle" id="themeToggle" type="button" title="点击切换主题">主题：奶白</button>
+      <button class="toggle" id="colorToggle" type="button" title="点击切换涨跌配色">配色：红涨绿跌</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="tiles" id="tiles" aria-label="行情"></section>
+
+    <section class="grid">
+      <div class="col-main">
+        <article class="card">
+          <header class="card-head">
+            <h2>走势与异动</h2>
+            <div class="symbol-tabs" id="symbolTabs" role="tablist"></div>
+          </header>
+          <div class="chart-meta" id="chartMeta"></div>
+          <div id="chart" class="chart" role="img" aria-label="价格走势图，三角形标记异动"></div>
+          <p class="hint">▲▼ 为异动（涨跌幅超过近 60 日波动率的 <span id="zHint">2</span> 倍），大小代表强度。点图上任意一天查看归因。</p>
+        </article>
+
+        <article class="card">
+          <header class="card-head">
+            <h2>当前热点 <small>48 小时 · 按独立来源数与时间衰减</small></h2>
+            <div class="topic-tabs" id="topicTabs" role="tablist"></div>
+          </header>
+          <ol class="hot" id="hot"></ol>
+        </article>
+      </div>
+
+      <div class="col-side">
+        <article class="card" id="attrCard">
+          <header class="card-head"><h2>异动归因</h2></header>
+          <div id="attribution" class="attribution"><p class="muted">在左边的图上点一个异动。</p></div>
+        </article>
+
+        <article class="card">
+          <header class="card-head"><h2>恐慌与贪婪 <small>CNN</small></h2></header>
+          <div id="gauge" class="gauge"></div>
+          <div id="fgMeta" class="fg-meta"></div>
+          <ul id="fgComponents" class="components"></ul>
+        </article>
+
+        <article class="card">
+          <header class="card-head"><h2>最近 30 天异动</h2></header>
+          <ul id="moves" class="moves"></ul>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="settings" class="settings" aria-labelledby="settingsTitle">
+    <form id="settingsForm" method="dialog" novalidate>
+      <header class="settings-head">
+        <h2 id="settingsTitle">AI 设置</h2>
+        <button type="button" class="x" id="settingsClose" aria-label="关闭">×</button>
+      </header>
+
+      <section class="settings-body">
+        <h3>模型</h3>
+        <label class="field">服务商
+          <select id="sPreset" name="preset"></select>
+        </label>
+        <p class="field-hint" id="sPresetHint"></p>
+
+        <div id="sModelFields">
+          <label class="field" id="sBaseUrlRow">API 地址
+            <input id="sBaseUrl" name="baseUrl" type="url" placeholder="https://…/v1" autocomplete="off" spellcheck="false">
+          </label>
+          <label class="field">API Key
+            <input id="sKey" name="apiKey" type="password" autocomplete="off" spellcheck="false">
+          </label>
+          <p class="field-hint">Key 只保存在你电脑上的 data/radar.db 里，不会显示在页面上，也不会被提交到 Git。<a id="sKeyLink" target="_blank" rel="noopener">去哪里拿 Key →</a></p>
+          <div class="field">模型
+            <div class="inline">
+              <input id="sModel" name="model" list="sModelList" autocomplete="off" spellcheck="false">
+              <datalist id="sModelList"></datalist>
+              <button type="button" class="toggle" id="sListModels">获取模型列表</button>
+            </div>
+          </div>
+          <div class="field">价格（美元 / 百万 token，用于统计花费和每日上限）
+            <div class="price-row">
+              <label>输入 <input id="sPriceIn" type="number" min="0" step="0.001" inputmode="decimal"></label>
+              <label>输出 <input id="sPriceOut" type="number" min="0" step="0.001" inputmode="decimal"></label>
+              <label>缓存命中 <input id="sPriceCached" type="number" min="0" step="0.001" inputmode="decimal"></label>
+            </div>
+          </div>
+          <details class="advanced">
+            <summary>高级：额外请求参数（JSON）</summary>
+            <textarea id="sExtra" rows="3" spellcheck="false"></textarea>
+            <p class="field-hint">原样加进每个请求，比如关掉思考模式 {"thinking":{"type":"disabled"}}。</p>
+          </details>
+        </div>
+
+        <h3>省钱</h3>
+        <label class="check"><input type="checkbox" id="sOnDemand">
+          <span><b>没人看的时候暂停模型</b>　超过 <input id="sIdle" type="number" min="5" max="240" class="mini"> 分钟没人打开看板，新闻先排队；回来时只用模型处理最近 <input id="sCatchUp" type="number" min="1" max="48" class="mini"> 小时的，更早的用规则判断。</span></label>
+        <label class="check"><input type="checkbox" id="sInherit">
+          <span><b>同一件事的其他报道直接沿用判断</b>　标题几乎一样的不再送模型（实测和模型自己判的结果一致 87%）。</span></label>
+        <label class="check"><input type="checkbox" id="sRescore">
+          <span><b>门槛附近的独立复核一次</b>　只对入选线 ±10 分的条目，约占花费的一成。关掉更省，精选会更"抖"。</span></label>
+        <label class="field">每日花费上限（美元，0 = 不限）
+          <input id="sCap" type="number" min="0" max="100" step="0.05" inputmode="decimal" class="short">
+        </label>
+        <p class="field-hint">到上限后当天剩下的时间改用规则模式，第二天自动恢复。</p>
+      </section>
+
+      <footer class="settings-foot">
+        <span id="sStatus" class="s-status" role="status"></span>
+        <button type="button" class="toggle" id="sTest">测试连接</button>
+        <button type="submit" class="btn" id="sSave">保存</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <footer class="foot">
+    <span>数据：Google News · Nasdaq · FRED · CNN Fear &amp; Greed</span>
+    <span>仅供研究，不构成投资建议</span>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>
