@@ -90,6 +90,16 @@ CREATE TABLE IF NOT EXISTS prices (
   PRIMARY KEY (symbol, date)
 );
 
+-- 用户加的自选股。行情、异动、归因都和内置标的走同一套流程。
+CREATE TABLE IF NOT EXISTS watchlist (
+  symbol TEXT PRIMARY KEY,
+  name TEXT NOT NULL,          -- 官方全名，如 "Apple Inc. Common Stock"
+  short_name TEXT NOT NULL,    -- 简称，如 "Apple"，用来显示和搜新闻
+  cls TEXT NOT NULL,           -- stocks | etf（Nasdaq 行情接口的分类）
+  exchange TEXT,
+  added_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS fear_greed (
   date TEXT PRIMARY KEY,
   score REAL NOT NULL,

@@ -47,7 +47,8 @@ cd move-radar && git pull && docker compose up -d --build
 |---|---|
 | 看板、行情、热点、异动（只读） | 所有人 |
 | 现场归因（要抓新闻、可能调模型） | 访客每小时全站合计 6 次、每个 IP 2 次（`PUBLIC_ATTRIBUTE_PER_HOUR`）；已归因过的直接返回，不占额度；管理员不限 |
-| AI 设置（会碰 API Key）、运行状态 | 仅管理员 |
+| 搜索股票 | 所有人（每个 IP 每分钟 30 次，结果缓存 10 分钟） |
+| 加入 / 移除自选、AI 设置（会碰 API Key）、运行状态 | 仅管理员 |
 
 - **管理员密码**写在服务器的 `.env` 里：`ADMIN_PASSWORD=`（至少 12 位）。不设的话，远程访问完全改不了设置，宁可锁死。
 - 登录后是 7 天的 HttpOnly、SameSite=Strict Cookie（走 HTTPS 时带 Secure）；连续输错 5 次锁 10 分钟。

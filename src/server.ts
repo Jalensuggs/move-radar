@@ -4,7 +4,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ASSETS, GROUP_NAMES, LEVELS, assetBySymbol } from "../config/assets.ts";
+import { GROUP_NAMES, LEVELS } from "../config/assets.ts";
+import { allAssets, findAsset } from "./assets.ts";
+import { addToWatchlist, removeFromWatchlist, searchSymbols, WatchError } from "./watchlist.ts";
 import { TOPICS } from "../config/topics.ts";
 import { all, get, getKv } from "./db.ts";
 import { hotEvents } from "./events.ts";
@@ -14,7 +16,7 @@ import { costToday, currentConfig, DEFAULT_SAVING, listModels, llmStatus, markVi
 import { attributeMove, MOVE_Z, type Attribution, type MoveRow } from "./moves.ts";
 import { SELECT_THRESHOLD } from "./judge.ts";
 import { tick } from "./worker.ts";
-import { authProblem, isAdmin, login, sameOrigin, takePublicAttribution } from "./auth.ts";
+import { authProblem, isAdmin, login, sameOrigin, takePublicAttribution, takeSearch } from "./auth.ts";
 
 const WEB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "web");
 const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml" };
@@ -48,7 +50,8 @@ function tile(symbol: string, name: string, extra: Record<string, unknown> = {})
   };
 }
 
-export function overview() {
+/** admin：这个访客是不是管理员（页面据此显示"移除自选"）。导出静态快照时不传，就是 false。 */
+export function overview(admin = false) {
   const dayAgo = Date.now() - 86400_000;
   const counts = get<{ total: number; judged: number; relevant: number; selected: number }>(
     `SELECT count(*) AS total, sum(state = 'judged') AS judged, sum(relevant = 1) AS relevant, sum(selected = 1) AS selected
@@ -61,6 +64,7 @@ export function overview() {
     "SELECT coalesce(mode, 'rules') AS mode, count(*) AS n FROM articles WHERE judged_at >= ? GROUP BY 1", midnight.getTime()).map((r) => [r.mode, r.n]));
   return {
     generatedAt: Date.now(),
+    admin,
     llm: llmStatus(),
     cost: costToday(),
     usage: { llm: usage.llm ?? 0, inherit: usage.inherit ?? 0, rules: usage.rules ?? 0 },
@@ -68,7 +72,7 @@ export function overview() {
     groups: GROUP_NAMES,
     topics: TOPICS.map((t) => ({ key: t.key, name: t.name })),
     tiles: [
-      ...ASSETS.map((a) => tile(a.symbol, a.name, { group: a.group, note: a.note ?? null })),
+      ...allAssets().map((a) => tile(a.symbol, a.name, { group: a.group, note: a.note ?? null, custom: !!a.custom })),
       // 现货价来自 FRED，有的服务器连不上它：没数据的卡片直接不显示。
       ...LEVELS.map((l) => tile(l.symbol, l.name, { group: "level" })).filter((t) => t.close != null),
     ],
@@ -157,7 +161,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 export function moveSummary(m: MoveRow) {
   const at = m.attribution ? (JSON.parse(m.attribution) as Attribution) : null;
   return {
-    symbol: m.symbol, name: assetBySymbol(m.symbol)?.name ?? m.symbol, date: m.date, ret: m.ret, z: m.z, close: m.close, forced: !!m.forced,
+    symbol: m.symbol, name: findAsset(m.symbol)?.name ?? m.symbol, date: m.date, ret: m.ret, z: m.z, close: m.close, forced: !!m.forced,
     attributed: !!at, mode: at?.mode ?? null, confidence: at?.confidence ?? null,
     primary: at?.primary ? { title: at.primary.title, publisher: at.primary.publisher, url: at.primary.url } : null,
     explanation: at?.explanation ?? null,
@@ -182,7 +186,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   if (p === "/api/overview") {
     // 看板每分钟（页面可见时）刷新一次，这就是"有人在看"的信号。闲置后第一次回来，马上跑一轮把积压的新闻处理掉。
     if (markViewer() && process.env.WORKER !== "off") void tick();
-    return send(res, 200, overview());
+    return send(res, 200, overview(isAdmin(req)));
   }
   if (p.startsWith("/api/settings") && !requireAdmin(req, res)) return;
   if (p === "/api/settings" && req.method === "GET") return send(res, 200, settingsView());
@@ -213,6 +217,34 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       return send(res, 200, { models: [], error: error instanceof Error ? error.message : String(error) });
     }
   }
+  // 股票搜索（公开，限流）和自选（加入 / 移除只有管理员）
+  if (p === "/api/search") {
+    if (!takeSearch(req)) return send(res, 429, { error: "搜得太快了，过一会儿再试" });
+    try {
+      return send(res, 200, await searchSymbols(q("q") ?? ""));
+    } catch (error) {
+      return send(res, 200, { results: [], hint: `暂时搜不了：${String(error instanceof Error ? error.message : error).slice(0, 60)}` });
+    }
+  }
+  if (p === "/api/watchlist" && req.method === "POST") {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const a = await addToWatchlist(String((await readJson(req)).symbol ?? ""));
+      return send(res, 200, { ok: true, symbol: a.symbol, name: a.name });
+    } catch (error) {
+      if (error instanceof WatchError) return send(res, 400, { error: error.message });
+      throw error;
+    }
+  }
+  if (p === "/api/watchlist/remove" && req.method === "POST") {
+    if (!requireAdmin(req, res)) return;
+    try {
+      return send(res, 200, { ok: removeFromWatchlist(String((await readJson(req)).symbol ?? "")) });
+    } catch (error) {
+      if (error instanceof WatchError) return send(res, 400, { error: error.message });
+      throw error;
+    }
+  }
   if (p === "/api/hot") return send(res, 200, { events: hotEvents({ topic: q("topic") || null, limit: Number(q("limit") || 20) }) });
   if (p === "/api/feed") {
     const topic = q("topic");
@@ -221,7 +253,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     return send(res, 200, { items: rows });
   }
   if (p === "/api/chart") {
-    const a = assetBySymbol(q("symbol") ?? "");
+    const a = findAsset(q("symbol") ?? "");
     if (!a) return send(res, 404, { error: "unknown symbol" });
     const moves = all<MoveRow>("SELECT * FROM moves WHERE symbol = ? ORDER BY date", a.symbol).map(moveSummary);
     return send(res, 200, { asset: { symbol: a.symbol, name: a.name, note: a.note ?? null, group: a.group }, series: series(a.symbol, 520), moves });
@@ -237,7 +269,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   }
   if (p === "/api/attribute" && req.method === "POST") {
     const { symbol, date } = (await readJson(req)) as { symbol?: string; date?: string };
-    if (!symbol || !date || !assetBySymbol(symbol) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return send(res, 400, { error: "symbol and date required" });
+    if (!symbol || !date || !findAsset(symbol) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return send(res, 400, { error: "symbol and date required" });
     // 已经归因过的直接给结果：不重算、不花钱、不占访客额度。
     const done = get<MoveRow>("SELECT * FROM moves WHERE symbol = ? AND date = ? AND attribution IS NOT NULL", symbol, date);
     if (done) return send(res, 200, { move: moveSummary(done), attribution: JSON.parse(done.attribution!) });

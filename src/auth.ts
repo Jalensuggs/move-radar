@@ -102,6 +102,21 @@ export function takePublicAttribution(req: IncomingMessage): { ok: boolean; erro
   return { ok: true };
 }
 
+/** 股票搜索是公开的，但每次都要去 Nasdaq 查：每个 IP 每分钟最多 30 次（结果另外缓存 10 分钟）。 */
+const searches = new Map<string, number[]>();
+export function takeSearch(req: IncomingMessage): boolean {
+  const ip = clientIp(req);
+  const now = Date.now();
+  const recent = (searches.get(ip) ?? []).filter((t) => now - t < 60_000);
+  if (recent.length >= 30) {
+    searches.set(ip, recent);
+    return false;
+  }
+  searches.set(ip, [...recent, now]);
+  if (searches.size > 500) searches.delete(searches.keys().next().value!);
+  return true;
+}
+
 /**
  * 改状态的请求只接受本页面发来的：别的网站借你的浏览器往这里发请求（CSRF）会因为 Origin 不对被拒；
  * 要求 JSON 也会让跨站请求先被浏览器的预检拦下。只比较主机（含端口），不比较 http / https：

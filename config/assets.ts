@@ -12,7 +12,7 @@ export type Feed =
 export interface AssetSpec {
   symbol: string;
   name: string;
-  group: "market" | "semis" | "ai" | "energy";
+  group: "market" | "semis" | "ai" | "energy" | "watch";
   /** 异动归因时，在哪些主线里找候选事件。 */
   topics: TopicKey[];
   /** 新闻里出现这些词，说明和这个标的直接相关（小写）。 */
@@ -21,6 +21,8 @@ export interface AssetSpec {
   newsQuery: string;
   feed: Feed;
   note?: string;
+  /** 用户在页面上加进自选的（存在数据库里，不在这个配置文件里）。 */
+  custom?: boolean;
 }
 
 const ALL: TopicKey[] = ["macro", "semis", "ai", "energy"];
@@ -55,5 +57,4 @@ export const LEVELS = [
   { symbol: "BRENT_SPOT", name: "布伦特现货", fredId: "DCOILBRENTEU" },
 ];
 
-export const GROUP_NAMES: Record<AssetSpec["group"], string> = { market: "大盘情绪", semis: "半导体", ai: "AI 巨头", energy: "能源与避险" };
-export const assetBySymbol = (s: string) => ASSETS.find((a) => a.symbol === s);
+export const GROUP_NAMES: Record<AssetSpec["group"], string> = { market: "大盘情绪", semis: "半导体", ai: "AI 巨头", energy: "能源与避险", watch: "自选" };

@@ -1,6 +1,7 @@
 // 行情与情绪：Nasdaq 数据接口（个股、指数、ETF）、FRED（官方序列）、CNN 恐慌贪婪指数。
 // 都不需要 key。第一次拉两年历史，之后每次只补最近几周。
-import { ASSETS, LEVELS, type AssetSpec } from "../../config/assets.ts";
+import { LEVELS, type AssetSpec } from "../../config/assets.ts";
+import { allAssets } from "../assets.ts";
 import { all, get, getKv, run, setKv, tx } from "../db.ts";
 import { etDate, addDays } from "../lib/text.ts";
 import { fetchJson, fetchText, sleep } from "../lib/http.ts";
@@ -100,6 +101,9 @@ function fromDate(symbol: string): string {
   return last ? addDays(last, -14) : addDays(today, -HISTORY_DAYS);
 }
 
+/** 拉一个标的的行情（第一次两年，之后补最近几周）。加入自选时也用它。 */
+export const refreshOneAsset = (a: AssetSpec) => refreshAsset(a, null);
+
 async function refreshAsset(a: AssetSpec, cnn: CnnResp | null): Promise<number> {
   const from = fromDate(a.symbol);
   let points: Array<[string, number]>;
@@ -138,7 +142,7 @@ export async function refreshMarket(): Promise<Record<string, number | string>> 
   } catch (error) {
     out.cnn = `error: ${String(error)}`.slice(0, 200);
   }
-  for (const a of ASSETS) {
+  for (const a of allAssets()) {
     try {
       out[a.symbol] = await refreshAsset(a, cnn);
     } catch (error) {

@@ -3,7 +3,8 @@
 // 归因：取异动前一个收盘到当天收盘的新闻 → 按"和这个标的有多相关 × 有多重要 × 多少家在报"排候选事件
 //       → LLM 从候选里选出主因并写解释（不许选候选以外的东西），规则模式直接取第一名。
 import { z } from "zod";
-import { ASSETS, assetBySymbol, type AssetSpec } from "../config/assets.ts";
+import type { AssetSpec } from "../config/assets.ts";
+import { allAssets, findAsset } from "./assets.ts";
 import { all, get, run } from "./db.ts";
 import { backfillNews } from "./collect/news.ts";
 import { dayReturns } from "./collect/market.ts";
@@ -43,9 +44,10 @@ export function moveStats(symbol: string, date: string): { ret: number; z: numbe
   return { ret, z: sd > 0 ? ret / sd : 0, close: rows.at(-1)!.close, prevDate: rows.at(-2)!.date };
 }
 
-export function detectMoves(): { found: number } {
+/** 检测异动。不传就检测所有标的（内置 + 自选）；加入一只新自选时只检测它。 */
+export function detectMoves(assets: AssetSpec[] = allAssets()): { found: number } {
   let found = 0;
-  for (const a of ASSETS) {
+  for (const a of assets) {
     const rows = all<{ date: string; close: number }>("SELECT date, close FROM prices WHERE symbol = ? ORDER BY date", a.symbol);
     const rets = rows.slice(1).map((r, i) => r.close / rows[i]!.close - 1);
     for (let i = LOOKBACK; i < rets.length; i++) {
@@ -99,9 +101,14 @@ function windowFor(prevDate: string, date: string) {
 }
 
 function candidatesFor(a: AssetSpec, from: number, to: number): { list: Candidate[]; newsCount: number } {
+  // 内置标的：只看被判为"相关"的新闻。自选股可能不在四条主线里（苹果、特斯拉……），
+  // 新闻会被判成不相关，所以标题里直接点到它的也算候选。
+  const esc = (k: string) => k.replace(/[\\%_]/g, "\\$&");
+  const direct = a.custom ? a.keywords.map(() => "lower(title) LIKE ? ESCAPE '\\'").join(" OR ") : "";
   const rows = all<{ id: number; event_id: number | null; title: string; title_zh: string | null; publisher: string | null; url: string; timeline_at: number; importance: number | null; topic: string; entities: string | null }>(
     `SELECT id, event_id, title, title_zh, publisher, url, timeline_at, importance, topic, entities FROM articles
-     WHERE relevant = 1 AND timeline_at BETWEEN ? AND ? AND topic IN (${a.topics.map(() => "?").join(",")})`, from, to, ...a.topics);
+     WHERE timeline_at BETWEEN ? AND ? AND ((relevant = 1 AND topic IN (${a.topics.map(() => "?").join(",")}))${direct ? ` OR (${direct})` : ""})`,
+    from, to, ...a.topics, ...(a.custom ? a.keywords.map((k) => `%${esc(k)}%`) : []));
   const byGroup = new Map<string, typeof rows>();
   for (const r of rows) {
     const k = r.event_id ? `e${r.event_id}` : `a${r.id}`;
@@ -168,7 +175,7 @@ function rulesAttribution(a: AssetSpec, ret: number, z: number, cands: Candidate
 }
 
 export async function attributeMove(symbol: string, date: string, opts: { force?: boolean } = {}): Promise<Attribution | null> {
-  const a = assetBySymbol(symbol);
+  const a = findAsset(symbol);
   if (!a) throw new Error(`unknown symbol ${symbol}`);
   let move = get<MoveRow>("SELECT * FROM moves WHERE symbol = ? AND date = ?", symbol, date);
   const stats = moveStats(symbol, date);
@@ -208,7 +215,7 @@ export async function attributeMove(symbol: string, date: string, opts: { force?
         `资产：${a.name}（${a.symbol}${a.note ? `，${a.note}` : ""}）`,
         `日期：${date}（美东收盘）`,
         `涨跌：${pct(stats.ret)}，约为近 60 个交易日波动率的 ${Math.abs(stats.z).toFixed(1)} 倍`,
-        `同日其他资产：${CONTEXT_SYMBOLS.filter((s) => s !== symbol).map((s) => `${assetBySymbol(s)?.name ?? s} ${pct(context[s])}`).join("，")}`,
+        `同日其他资产：${CONTEXT_SYMBOLS.filter((s) => s !== symbol).map((s) => `${findAsset(s)?.name ?? s} ${pct(context[s])}`).join("，")}`,
         "",
         "候选事件（按相关度排序，[直接] 表示新闻直接提到了这个资产）：",
         ...cands.map((c) => `${c.ref}: ${c.titleOriginal}${c.title !== c.titleOriginal ? `（${c.title}）` : ""}｜${c.publisher ?? "未知"}｜${new Date(c.at).toISOString().slice(0, 16)}Z｜重要度 ${c.importance}｜${c.publishers} 家报道${c.direct ? "｜[直接]" : ""}`),

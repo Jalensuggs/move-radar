@@ -6,7 +6,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ASSETS, assetBySymbol } from "../../config/assets.ts";
+import { allAssets } from "../assets.ts";
 import { TOPICS } from "../../config/topics.ts";
 import { all } from "../db.ts";
 import { hotEvents } from "../events.ts";
@@ -15,7 +15,7 @@ import { moveSummary, overview } from "../server.ts";
 import type { MoveRow } from "../moves.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const out = path.join(root, "docs");
+const out = process.env.EXPORT_DIR ? path.resolve(process.env.EXPORT_DIR) : path.join(root, "docs"); // EXPORT_DIR 只用来测试导出，平时不用设
 const snap = path.join(out, "snapshot");
 
 rmSync(snap, { recursive: true, force: true });
@@ -38,16 +38,18 @@ for (const key of ["", ...TOPICS.map((t) => t.key)]) write(`hot-${key || "all"}.
 
 // 每个标的的走势、异动，以及已经归因的异动的详情
 let details = 0;
-for (const a of ASSETS) {
+const safe = (s: string) => s.replace(/[^\w.-]/g, "_"); // 页面的 snapshotPath 用同一个规则
+const assets = allAssets();
+for (const a of assets) {
   const rows = all<MoveRow>("SELECT * FROM moves WHERE symbol = ? ORDER BY date", a.symbol);
-  write(`chart-${a.symbol}.json`, {
+  write(`chart-${safe(a.symbol)}.json`, {
     asset: { symbol: a.symbol, name: a.name, note: a.note ?? null, group: a.group },
     series: series(a.symbol, 520),
     moves: rows.map(moveSummary),
   });
   for (const m of rows) {
     if (!m.attribution) continue;
-    write(`move-${a.symbol}-${m.date}.json`, { move: moveSummary(m), attribution: JSON.parse(m.attribution) });
+    write(`move-${safe(a.symbol)}-${m.date}.json`, { move: moveSummary(m), attribution: JSON.parse(m.attribution) });
     details++;
   }
 }
@@ -67,5 +69,5 @@ cpSync(path.join(root, "node_modules", "echarts", "dist", "echarts.min.js"), pat
 writeFileSync(path.join(out, ".nojekyll"), ""); // 不让 GitHub 用 Jekyll 处理这些文件
 
 const count = all<{ n: number }>("SELECT count(*) AS n FROM articles WHERE selected = 1")[0]!.n;
-console.log(`导出到 ${path.relative(root, out)}/：${ASSETS.length} 个标的走势，${details} 条异动归因，${count} 条精选新闻在库`);
+console.log(`导出到 ${path.relative(root, out)}/：${assets.length} 个标的走势，${details} 条异动归因，${count} 条精选新闻在库`);
 if (!existsSync(path.join(out, "screenshot.jpg"))) console.log("提示：docs/screenshot.jpg 不存在，README 里的截图会裂");

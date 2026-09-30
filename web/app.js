@@ -182,7 +182,9 @@ function formBody() {
 }
 
 /** 需要管理员：有密码就弹登录框，没设密码就把原因告诉他。 */
-function askLogin(message) {
+let afterLogin = null;
+function askLogin(message, then) {
+  afterLogin = then ?? null;
   const d = $("#login");
   $("#loginPassword").hidden = !message.login;
   $("#loginSubmit").hidden = !message.login;
@@ -201,7 +203,9 @@ $("#loginForm").addEventListener("submit", async (e) => {
   try {
     await postSettings("/api/login", { password: $("#loginPassword").value });
     $("#login").close();
-    await openSettings();
+    await refreshOverview(); // 现在是管理员了，页面上才会出现"移除自选"
+    await (afterLogin ?? openSettings)();
+    afterLogin = null;
   } catch (err) {
     $("#loginError").textContent = err.message;
     $("#loginPassword").select();
@@ -310,26 +314,121 @@ function renderTiles() {
     ["semis", o.tiles.filter((t) => t.group === "semis")],
     ["ai", o.tiles.filter((t) => t.group === "ai")],
     ["energy", o.tiles.filter((t) => t.group === "energy" || t.group === "level")],
+    ["watch", o.tiles.filter((t) => t.group === "watch")],
   ];
   let html = "";
-  for (const [g, tiles] of rows) {
-    if (!tiles.length) continue;
-    html += `<div class="tile-label">${esc(o.groups[g])}</div>`;
-    for (const t of tiles) {
+  for (const [g, all] of rows) {
+    if (!all.length) continue;
+    // 一行最多 7 张（左边一列是分组名）：自选可能很多，多出来的换行，左边补一个空位保持列对齐。
+    for (let i = 0; i < all.length; i += 7) {
+    html += `<div class="tile-label">${i === 0 ? esc(o.groups[g]) : ""}</div>`;
+    for (const t of all.slice(i, i + 7)) {
       const level = t.group === "level";
       const tag = level ? "div" : "button";
       // 右上角：可点的标的显示代码；现货显示数据日期（FRED 有发布延迟）。
       const corner = level ? (t.date ?? "").slice(5) : t.symbol;
       const tip = [t.name, t.note, level ? "FRED 官方现货价，发布有延迟" : null, t.date && `数据日期 ${t.date}`, "小图：近 30 个交易日走势"].filter(Boolean).join(" · ");
-      html += `<${tag} class="tile${level ? " static" : ""}${t.symbol === state.symbol ? " active" : ""}" data-symbol="${esc(t.symbol)}" title="${esc(tip)}"${level ? "" : ' type="button"'}>
+      const card = `<${tag} class="tile${level ? " static" : ""}${t.symbol === state.symbol ? " active" : ""}" data-symbol="${esc(t.symbol)}" title="${esc(tip)}"${level ? "" : ' type="button"'}>
         <div class="name"><span>${esc(t.name)}</span><small>${esc(corner)}</small></div>
         <div class="row"><span class="price">${fmtPrice(t.close)}</span><span class="chg ${cls(t.change)}">${pct(t.change)}</span></div>
         ${spark(t.spark)}
       </${tag}>`;
+      // 管理员能移除自选：按钮和卡片是并列的（按钮里不能再套按钮）。
+      html += t.custom && o.admin
+        ? `<div class="tile-slot">${card}<button type="button" class="tile-x" data-remove="${esc(t.symbol)}" data-name="${esc(t.name)}" title="从自选移除" aria-label="从自选移除 ${esc(t.name)}">×</button></div>`
+        : card;
+    }
     }
   }
   $("#tiles").innerHTML = html;
   for (const el of document.querySelectorAll("button.tile")) el.addEventListener("click", () => selectSymbol(el.dataset.symbol));
+  for (const el of document.querySelectorAll(".tile-x")) el.addEventListener("click", () => removeWatch(el.dataset.remove, el.dataset.name));
+}
+
+// ── 搜索股票、加入 / 移除自选 ────────────────────────────────────────────────
+const sInput = $("#searchInput");
+const sList = $("#searchResults");
+let sTimer = null;
+let sSeq = 0;
+
+function closeSearch() {
+  sList.hidden = true;
+  sSeq++; // 让还在路上的搜索结果作废
+}
+
+async function runSearch(q) {
+  const seq = ++sSeq;
+  sList.hidden = false;
+  sList.innerHTML = '<li class="s-empty">搜索中…</li>';
+  try {
+    const { results, hint } = await api(`/api/search?q=${encodeURIComponent(q)}`);
+    if (seq !== sSeq) return;
+    if (!results.length) {
+      sList.innerHTML = `<li class="s-empty">${esc(hint || "没有找到。目前只支持美股和 ETF，请用代码或英文名搜。")}</li>`;
+      return;
+    }
+    sList.innerHTML = results.map((r) => `<li class="s-item" role="option" data-symbol="${esc(r.symbol)}" data-state="${r.state}">
+        <span class="s-sym">${esc(r.symbol)}</span>
+        <span class="s-name"><b>${esc(r.short)}</b><small>${esc(r.name)}${r.exchange ? ` · ${esc(r.exchange)}` : ""}${r.type === "etf" ? " · ETF" : ""}</small></span>
+        ${r.state === "none" ? `<button type="button" class="s-add" data-add="${esc(r.symbol)}">+ 自选</button>` : `<span class="s-state">${r.state === "watch" ? "已在自选" : "默认列表"}</span>`}
+      </li>`).join("");
+  } catch (e) {
+    if (seq === sSeq) sList.innerHTML = `<li class="s-error">${esc(e.message)}</li>`;
+  }
+}
+
+sInput.addEventListener("input", () => {
+  clearTimeout(sTimer);
+  const q = sInput.value.trim();
+  if (!q) return closeSearch();
+  sTimer = setTimeout(() => runSearch(q), 250);
+});
+sInput.addEventListener("focus", () => { if (sInput.value.trim() && sList.children.length) sList.hidden = false; });
+sInput.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeSearch(); sInput.blur(); } });
+document.addEventListener("click", (e) => { if (!$("#search").contains(e.target)) sList.hidden = true; });
+
+sList.addEventListener("click", (e) => {
+  const add = e.target.closest("[data-add]");
+  if (add) return void addWatch(add.dataset.add, add);
+  // 点已经在列表里的：直接看它的走势
+  const item = e.target.closest(".s-item");
+  if (item && item.dataset.state !== "none") {
+    closeSearch();
+    sInput.value = "";
+    selectSymbol(item.dataset.symbol);
+    $("#chart").scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+});
+
+async function addWatch(symbol, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "添加中…"; }
+  try {
+    await postSettings("/api/watchlist", { symbol });
+    await refreshOverview();
+    closeSearch();
+    sInput.value = "";
+    await selectSymbol(symbol);
+    loadMoves().catch(() => {});
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = "+ 自选"; }
+    if (e.status === 401) return askLogin({ login: true, text: "加入自选需要管理员密码。" }, () => addWatch(symbol));
+    if (e.status === 403) return askLogin({ login: false, text: e.message });
+    sList.querySelector(".s-error")?.remove();
+    sList.insertAdjacentHTML("afterbegin", `<li class="s-error">${esc(e.message)}</li>`);
+  }
+}
+
+async function removeWatch(symbol, name) {
+  if (!confirm(`从自选移除 ${name}（${symbol}）？\n它的行情和异动记录会一起删掉。`)) return;
+  try {
+    await postSettings("/api/watchlist/remove", { symbol });
+    await refreshOverview();
+    if (state.symbol === symbol) await selectSymbol("NVDA");
+    loadMoves().catch(() => {});
+  } catch (e) {
+    if (e.status === 401) return askLogin({ login: true, text: "移除自选需要管理员密码。" }, () => removeWatch(symbol, name));
+    alert(e.message);
+  }
 }
 
 // ── 标的切换 ────────────────────────────────────────────────────────────────
@@ -559,13 +658,17 @@ async function refreshOverview() {
   state.overview = await api("/api/overview");
   renderChips();
   renderTiles();
+  renderSymbolTabs();
   renderFearGreed();
 }
 
 async function boot() {
   applyTheme();
   applyColors();
-  if (STATIC) $("#settingsOpen").hidden = true;
+  if (STATIC) {
+    $("#settingsOpen").hidden = true;
+    $("#search").hidden = true;
+  }
   state.symbol = safeGet("symbol") || state.symbol;
   await refreshOverview();
   if (!state.overview.tiles.some((t) => t.symbol === state.symbol && t.group !== "level")) state.symbol = "NVDA";
